@@ -94,8 +94,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log("[solve-text] Gemini raw response:", geminiResponse.text?.substring(0, 500));
+
     // 7. Parse response
     const questions = parseUniversalResponse(geminiResponse.text);
+    console.log("[solve-text] Parsed questions count:", questions.length);
 
     // 8. Deduct credit (free users only)
     if (user.tier !== "pro") {
@@ -112,6 +115,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       questions,
+      rawText: questions.length === 0 ? geminiResponse.text?.substring(0, 2000) : undefined,
       creditsRemaining: Math.max(0, creditsRemaining),
     });
   } catch (error: any) {
