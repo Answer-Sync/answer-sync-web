@@ -200,6 +200,7 @@ async function callGemini(
         generationConfig: {
           temperature: 0.1,
           maxOutputTokens: 4096,
+          responseMimeType: "application/json",
         },
       }),
     });
@@ -223,25 +224,58 @@ function parseUniversalResponse(
 ): Array<{ id: string; question: string; options: string[]; answer: string; confidence: number }> {
   if (!text) return [];
 
+  // Strategy 1: Try direct JSON parse (responseMimeType should give clean JSON)
   try {
-    // Find JSON array anywhere in response (handles thinking tokens)
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      let jsonStr = jsonMatch[0].replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      const parsed = JSON.parse(jsonStr);
-      if (Array.isArray(parsed)) {
-        return parsed.map((item: any, i: number) => ({
-          id: item.id || `q_${i}`,
-          question: String(item.question || ""),
-          options: Array.isArray(item.options) ? item.options.map(String) : [],
-          answer: typeof item.answer === "object" ? JSON.stringify(item.answer) : String(item.answer || ""),
-          confidence: typeof item.confidence === "number" ? item.confidence : 0.5,
-        }));
+    const parsed = JSON.parse(text.trim());
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return mapParsedQuestions(parsed);
+    }
+  } catch (e) {
+    // Not clean JSON, try extraction strategies
+  }
+
+  // Strategy 2: Find JSON array using balanced bracket matching
+  try {
+    const startIdx = text.indexOf('[');
+    if (startIdx !== -1) {
+      let depth = 0;
+      let endIdx = -1;
+      for (let i = startIdx; i < text.length; i++) {
+        if (text[i] === '[') depth++;
+        if (text[i] === ']') depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+      if (endIdx > startIdx) {
+        let jsonStr = text.substring(startIdx, endIdx + 1);
+        jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return mapParsedQuestions(parsed);
+        }
       }
     }
   } catch (e) {
-    console.error("[solve-text] Parse error:", e, text?.substring(0, 200));
+    console.error("[solve-text] Bracket parse error:", e, text?.substring(0, 300));
   }
 
+  // Strategy 3: Code fence extraction
+  try {
+    const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) {
+      const parsed = JSON.parse(fenceMatch[1].trim());
+      if (Array.isArray(parsed)) return mapParsedQuestions(parsed);
+    }
+  } catch (e) {}
+
   return [];
+}
+
+function mapParsedQuestions(parsed: any[]) {
+  return parsed.map((item: any, i: number) => ({
+    id: item.id || `q_${i}`,
+    question: String(item.question || ""),
+    options: Array.isArray(item.options) ? item.options.map(String) : [],
+    answer: typeof item.answer === "object" ? JSON.stringify(item.answer) : String(item.answer || ""),
+    confidence: typeof item.confidence === "number" ? item.confidence : 0.5,
+  }));
 }
